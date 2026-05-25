@@ -29,6 +29,7 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Table, TableStyle
 
 # ---------- CONFIG ----------
 SHEET_NAME = "Form responses 1"
+INPUT_DIR  = "input"
 OUTPUT_DIR = "output"
 FONTS_DIR  = "fonts"
 MAX_SCORE  = 20
@@ -47,15 +48,14 @@ COL_ND2_STD     = "ધોરણ 2"
 
 # ---------- FONT ----------
 FONT_URL = (
-    "https://github.com/google/fonts/raw/main/ofl/"
-    "notosansgujarati/NotoSansGujarati%5Bwdth%2Cwght%5D.ttf"
+    "https://fonts.google.com/selection?preview.script=Latn&preview.text_type=custom&query=Hind+Vadodara"
 )
-FONT_NAME = "NotoGujarati"
+FONT_NAME = "HindVadodara-Medium"
 
 
 def ensure_font():
     Path(FONTS_DIR).mkdir(exist_ok=True)
-    font_path = Path(FONTS_DIR) / "NotoSansGujarati.ttf"
+    font_path = Path(FONTS_DIR) / "HindVadodara-Medium.ttf"
     if not font_path.exists():
         print(f"Downloading Gujarati font (first run only) → {font_path}")
         import requests
@@ -65,10 +65,28 @@ def ensure_font():
     pdfmetrics.registerFont(TTFont(FONT_NAME, str(font_path)))
 
 
-def extract_chapter_label(input_file: Path) -> str:
+def extract_chapter_label(input_file: Path) -> tuple[str, str]:
+    """Extract chapter label and language from filename.
+    Returns: (chapter_label, language)
+    E.g., "Chapter_10_english (Responses)" → ("Chapter_10", "English")
+    If no language found, defaults to "Gujarati"
+    """
     stem = input_file.stem
     label = re.sub(r'\s*\(?\s*responses?\s*\)?\s*$', '', stem, flags=re.IGNORECASE).strip()
-    return label
+    
+    # Try to extract language (e.g., "english", "gujarati", "hindi", etc.)
+    # Look for language patterns with underscore, space, or word boundary
+    language_match = re.search(r'(?:_|\s)(english|gujarati|hindi|marathi|sanskrit|french|spanish|german|chinese|japanese)(?:_|\s|$)', label, re.IGNORECASE)
+    
+    if language_match:
+        language = language_match.group(1).capitalize()
+        # Remove language from label (handle underscore and spaces)
+        label = re.sub(r'(?:_|\s)' + language_match.group(1) + r'(?:_|\s|$)', '', label, flags=re.IGNORECASE).strip()
+        label = re.sub(r'\s+', '_', label)  # Normalize spaces to underscores
+    else:
+        language = "Gujarati"
+    
+    return label, language
 
 
 # ---------- DATA PREP ----------
@@ -183,37 +201,45 @@ def render_pdf(df, out_path, title_text):
 # ---------- MAIN ----------
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: python split_responses.py <filename.xlsx>")
-        sys.exit(1)
-
-    input_file = Path(sys.argv[1])
-    if not input_file.exists():
-        print(f"ERROR: '{input_file}' not found.")
-        sys.exit(1)
-
     print("Setting up font ...")
     ensure_font()
 
-    print(f"Reading {input_file.name} ...")
-    df = pd.read_excel(input_file, sheet_name=SHEET_NAME)
-    print(f"  Loaded {len(df)} total responses")
-
-    chapter = extract_chapter_label(input_file)
-    title_base = f"{TITLE_PREFIX} : {chapter}"
-
+    Path(INPUT_DIR).mkdir(exist_ok=True)
     Path(OUTPUT_DIR).mkdir(exist_ok=True)
 
-    print("Building PDFs ...")
-    render_pdf(build_balika_df(df),
-               Path(OUTPUT_DIR) / f"{TITLE_PREFIX} {chapter} (Balika).pdf",
-               title_base)
-    render_pdf(build_nd_df(df, COL_ND1_MANDAL, COL_ND1_NAME, COL_ND1_STD, "ND1"),
-               Path(OUTPUT_DIR) / f"{TITLE_PREFIX} {chapter} (ND1).pdf",
-               f"{title_base} : ND 1")
-    render_pdf(build_nd_df(df, COL_ND2_MANDAL, COL_ND2_NAME, COL_ND2_STD, "ND2"),
-               Path(OUTPUT_DIR) / f"{TITLE_PREFIX} {chapter} (ND2).pdf",
-               f"{title_base} : ND 2")
+    # Find all Excel files in input folder
+    input_folder = Path(INPUT_DIR)
+    excel_files = list(input_folder.glob("*.xlsx")) + list(input_folder.glob("*.xls"))
+    
+    if not excel_files:
+        print(f"ERROR: No Excel files found in '{INPUT_DIR}/' folder.")
+        sys.exit(1)
+
+    print(f"Found {len(excel_files)} Excel file(s) in {INPUT_DIR}/ folder")
+    
+    for input_file in excel_files:
+        print(f"\nProcessing {input_file.name} ...")
+        
+        try:
+            df = pd.read_excel(input_file, sheet_name=SHEET_NAME)
+            print(f"  Loaded {len(df)} total responses")
+
+            chapter, language = extract_chapter_label(input_file)
+            title_base = f"{TITLE_PREFIX} : {chapter}"
+
+            print("Building PDFs ...")
+            render_pdf(build_balika_df(df),
+                       Path(OUTPUT_DIR) / f"{language} {TITLE_PREFIX} {chapter} (Balika).pdf",
+                       title_base)
+            render_pdf(build_nd_df(df, COL_ND1_MANDAL, COL_ND1_NAME, COL_ND1_STD, "ND1"),
+                       Path(OUTPUT_DIR) / f"{language} {TITLE_PREFIX} {chapter} (ND1).pdf",
+                       f"{title_base} : ND 1")
+            render_pdf(build_nd_df(df, COL_ND2_MANDAL, COL_ND2_NAME, COL_ND2_STD, "ND2"),
+                       Path(OUTPUT_DIR) / f"{language} {TITLE_PREFIX} {chapter} (ND2).pdf",
+                       f"{title_base} : ND 2")
+        except Exception as e:
+            print(f"  ⚠  Error processing {input_file.name}: {e}")
+            continue
 
     print("\nDone. Files are in ./output/")
 
